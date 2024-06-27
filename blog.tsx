@@ -15,6 +15,7 @@ import {
   html,
   HtmlOptions,
   serve,
+  serveDir,
   UnoCSS,
 } from "./deps.ts";
 import { Index } from "./components.tsx";
@@ -261,7 +262,7 @@ export async function handler(
     });
   }
 
-  return await new Response(null, { status: 404 });
+  return await serveDir(req);
 }
 
 export function ga(gaKey: string): BlogMiddleware {
