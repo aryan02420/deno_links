@@ -10,39 +10,25 @@ import {
   callsites,
   ColorScheme,
   createReporter,
-  dirname,
-  Feed,
   Fragment,
-  fromFileUrl,
-  frontMatter,
-  gfm,
   h,
   html,
   HtmlOptions,
-  join,
-  relative,
-  removeMarkdown,
   serve,
-  serveDir,
   UnoCSS,
-  walk,
 } from "./deps.ts";
-import { pooledMap } from "https://deno.land/std@0.187.0/async/pool.ts";
-import { Index, PostPage } from "./components.tsx";
-import type { ConnInfo, FeedItem } from "./deps.ts";
+import { Index } from "./components.tsx";
+import type { ConnInfo } from "./deps.ts";
 import type {
   BlogContext,
   BlogMiddleware,
   BlogSettings,
   BlogState,
-  Post,
 } from "./types.d.ts";
-import { WalkEntry } from "https://deno.land/std@0.176.0/fs/walk.ts";
 
 export { Fragment, h };
 
 const IS_DEV = Deno.args.includes("--dev") && "watchFs" in Deno;
-const POSTS = new Map<string, Post>();
 const HMR_SOCKETS: Set<WebSocket> = new Set();
 
 const HMR_CLIENT = `let socket;
@@ -165,133 +151,16 @@ function composeMiddlewares(state: BlogState) {
   };
 }
 
-export async function configureBlog(
-  url: string,
-  isDev: boolean,
+export function configureBlog(
+  _url: string,
+  _isDev: boolean,
   settings?: BlogSettings,
 ): Promise<BlogState> {
-  let directory;
-
-  try {
-    const blogPath = fromFileUrl(url);
-    directory = dirname(blogPath);
-  } catch (e) {
-    console.error(e);
-    throw new Error("Cannot run blog from a remote URL.");
-  }
-
-  // Override blog directory, if `rootDirectory` is provided
-  directory = settings?.rootDirectory ?? directory;
-
   const state: BlogState = {
-    directory,
     ...settings,
   };
 
-  await loadContent(directory, isDev);
-
-  return state;
-}
-
-async function loadContent(blogDirectory: string, isDev: boolean) {
-  // Read posts from the current directory and store them in memory.
-  const postsDirectory = join(blogDirectory, "posts");
-
-  const traversal: WalkEntry[] = [];
-  for await (const entry of walk(postsDirectory)) {
-    if (entry.isFile && entry.path.endsWith(".md")) {
-      traversal.push(entry);
-    }
-  }
-
-  const pool = pooledMap(
-    25,
-    traversal,
-    (entry) => loadPost(postsDirectory, entry.path),
-  );
-
-  for await (const _ of pool) {
-    // noop
-  }
-
-  if (isDev) {
-    watchForChanges(postsDirectory).catch(() => {});
-  }
-}
-
-// Watcher watches for .md file changes and updates the posts.
-async function watchForChanges(postsDirectory: string) {
-  const watcher = Deno.watchFs(postsDirectory);
-  for await (const event of watcher) {
-    if (event.kind === "modify" || event.kind === "create") {
-      for (const path of event.paths) {
-        if (path.endsWith(".md")) {
-          try {
-            await loadPost(postsDirectory, path);
-            HMR_SOCKETS.forEach((socket) => {
-              socket.send("refresh");
-            });
-          } catch (err) {
-            console.error(`loadPost ${path} error:`, err.message);
-          }
-        }
-      }
-    }
-  }
-}
-
-async function loadPost(postsDirectory: string, path: string) {
-  const contents = await Deno.readTextFile(path);
-  let pathname = "/" + relative(postsDirectory, path);
-  // Remove .md extension.
-  pathname = pathname.slice(0, -3);
-
-  const { body: content, attrs: _data } = frontMatter<Record<string, unknown>>(
-    contents,
-  );
-
-  const data = recordGetter(_data);
-
-  let snippet: string | undefined = data.get("snippet") ??
-    data.get("abstract") ??
-    data.get("summary") ??
-    data.get("description");
-  if (!snippet) {
-    const maybeSnippet = content.split("\n\n")[0];
-    if (maybeSnippet) {
-      snippet = removeMarkdown(maybeSnippet.replace("\n", " "));
-    } else {
-      snippet = "";
-    }
-  }
-
-  // Note: users can override path of a blog post using
-  // pathname in front matter.
-  pathname = data.get("pathname") ?? pathname;
-
-  const post: Post = {
-    title: data.get("title") ?? "Untitled",
-    author: data.get("author"),
-    pathname,
-    // Note: no error when publish_date is wrong or missed
-    publishDate: data.get("publish_date") instanceof Date
-      ? data.get("publish_date")!
-      : new Date(),
-    snippet,
-    markdown: content,
-    coverHtml: data.get("cover_html"),
-    ogImage: data.get("og:image"),
-    tags: data.get("tags"),
-    allowIframes: data.get("allow_iframes"),
-    disableHtmlSanitization: data.get("disable_html_sanitization"),
-    readTime: readingTime(content),
-    renderMath: data.get("render_math"),
-  };
-
-  if (POSTS.get(pathname)) {
-    console.warn(`Duplicate blog post path: ${pathname}`);
-  }
-  POSTS.set(pathname, post);
+  return Promise.resolve(state);
 }
 
 export async function handler(
@@ -299,7 +168,7 @@ export async function handler(
   ctx: BlogContext,
 ) {
   const { state: blogState } = ctx;
-  const { pathname, searchParams } = new URL(req.url);
+  const { pathname } = new URL(req.url);
   const canonicalUrl = blogState.canonicalUrl || new URL(req.url).origin;
   const ogImage = typeof blogState.ogImage !== "string"
     ? blogState.ogImage?.url
@@ -307,10 +176,6 @@ export async function handler(
   const twitterCard = typeof blogState.ogImage !== "string"
     ? blogState.ogImage?.twitterCard
     : "summary_large_image";
-
-  if (pathname === "/feed") {
-    return serveRSS(req, blogState, POSTS);
-  }
 
   if (IS_DEV) {
     if (pathname == "/hmr.js") {
@@ -391,106 +256,12 @@ export async function handler(
       body: (
         <Index
           state={blogState}
-          posts={filterPosts(POSTS, searchParams)}
         />
       ),
     });
   }
 
-  const post = POSTS.get(decodeURIComponent(pathname));
-  if (post) {
-    // Check for an Accept: text/plain header
-    if (
-      req.headers.has("Accept") && req.headers.get("Accept") === "text/plain"
-    ) {
-      return new Response(post.markdown);
-    }
-    return html({
-      ...sharedHtmlOptions,
-      title: post.title,
-      meta: {
-        ...sharedMetaTags,
-        "description": post.snippet,
-        "og:title": post.title,
-        "og:description": post.snippet,
-        "og:image": post.ogImage,
-        "twitter:title": post.title,
-        "twitter:description": post.snippet,
-        "twitter:image": post.ogImage,
-        "twitter:card": post.ogImage ? twitterCard : undefined,
-      },
-      styles: [
-        gfm.CSS,
-        `.markdown-body { --color-canvas-default: transparent !important; --color-canvas-subtle: #edf0f2; --color-border-muted: rgba(128,128,128,0.2); } .markdown-body img + p { margin-top: 16px; }`,
-        ...(blogState.style ? [blogState.style] : []),
-        ...(post.renderMath ? [gfm.KATEX_CSS] : []),
-      ],
-      body: <PostPage post={post} state={blogState} />,
-    });
-  }
-
-  let fsRoot = blogState.directory;
-  try {
-    await Deno.lstat(join(blogState.directory, "./posts", pathname));
-    fsRoot = join(blogState.directory, "./posts");
-  } catch (e) {
-    if (!(e instanceof Deno.errors.NotFound)) {
-      console.error(e);
-      return new Response(e.message, { status: 500 });
-    }
-  }
-
-  return serveDir(req, { fsRoot });
-}
-
-/** Serves the rss/atom feed of the blog. */
-function serveRSS(
-  req: Request,
-  state: BlogState,
-  posts: Map<string, Post>,
-): Response {
-  const url = state.canonicalUrl
-    ? new URL(state.canonicalUrl)
-    : new URL(req.url);
-  const origin = url.origin;
-  const copyright = `Copyright ${new Date().getFullYear()} ${origin}`;
-  const feed = new Feed({
-    title: state.title ?? "Blog",
-    description: state.description,
-    id: `${origin}/blog`,
-    link: `${origin}/blog`,
-    language: state.lang ?? "en",
-    favicon: `${origin}/favicon.ico`,
-    copyright: copyright,
-    generator: "Feed (https://github.com/jpmonette/feed) for Deno",
-    feedLinks: {
-      atom: `${origin}/feed`,
-    },
-  });
-
-  for (const [_key, post] of posts.entries()) {
-    const item: FeedItem = {
-      id: `${origin}${post.pathname}`,
-      title: post.title,
-      description: post.snippet,
-      date: post.publishDate,
-      link: `${origin}${post.pathname}`,
-      author: post.author?.split(",").map((author: string) => ({
-        name: author.trim(),
-      })),
-      image: post.ogImage,
-      copyright,
-      published: post.publishDate,
-    };
-    feed.addItem(item);
-  }
-
-  const atomFeed = feed.atom1();
-  return new Response(atomFeed, {
-    headers: {
-      "content-type": "application/atom+xml; charset=utf-8",
-    },
-  });
+  return await new Response(null, { status: 404 });
 }
 
 export function ga(gaKey: string): BlogMiddleware {
@@ -558,31 +329,4 @@ export function redirects(redirectMap: Record<string, string>): BlogMiddleware {
       });
     }
   };
-}
-
-function filterPosts(
-  posts: Map<string, Post>,
-  searchParams: URLSearchParams,
-) {
-  const tag = searchParams.get("tag");
-  if (!tag) {
-    return posts;
-  }
-  return new Map(
-    Array.from(posts.entries()).filter(([, p]) => p.tags?.includes(tag)),
-  );
-}
-
-function recordGetter(data: Record<string, unknown>) {
-  return {
-    get<T>(key: string): T | undefined {
-      return data[key] as T;
-    },
-  };
-}
-
-function readingTime(text: string) {
-  const wpm = 225;
-  const words = text.split(/\s+/).length;
-  return Math.ceil(words / wpm);
 }
