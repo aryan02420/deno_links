@@ -164,7 +164,7 @@ function Footer(_props: { author?: string }) {
           Powered by{" "}
           <a
             class="inline-flex items-center gap-1 underline hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
-            href="https://deno.land/x/links"
+            href="https://github.com/aryan02420/deno_links"
           >
             Deno Links
           </a>
