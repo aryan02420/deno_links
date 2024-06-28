@@ -59,9 +59,9 @@ export function Index({ state }: IndexProps) {
                 {state.description}
               </p>
             )}
-            {state.quickLinks && (
+            {state.links && (
               <nav class="mt-3 flex gap-2">
-                {state.quickLinks.map((link) => {
+                {state.links.map((link) => {
                   const url = new URL(link.url);
                   let Icon = IconExternalLink;
                   if (url.protocol === "mailto:") {

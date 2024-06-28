@@ -44,7 +44,7 @@ export interface BlogSettings {
   /** The author of the blog. Can be overridden by respective post settings. */
   author?: string;
   /** Social links */
-  quickLinks?: Link[];
+  links?: Link[];
   sections?: LinkSection[];
   /** The element ot use as header */
   header?: VNode;
