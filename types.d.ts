@@ -21,6 +21,8 @@ type Link = {
   icon?: VNode;
   /** The link target */
   target?: "_self" | "_blank" | "_parent" | "_top";
+  /** Adds the `rel="me"` attribute to the link for identity verification */
+  relMe?: boolean;
 };
 
 type LinkSection = {
